@@ -283,7 +283,7 @@ export default {
     noDescription: 'Нет описания',
     emptyKnowledgeDragDrop: 'База знаний пуста, перетащите файлы для загрузки',
     pdfDocFormat: 'Файлы pdf, doc формата, не более 10 МБ',
-    textMarkdownFormat: 'Файлы text, markdown формата, не более 200 КБ',
+    textMarkdownFormat: 'Файлы text, markdown, html формата, не более 200 КБ',
     dragFileNotText: 'Пожалуйста, перетащите файлы, а не текст или ссылки',
     searchPlaceholder: 'Поиск по базам знаний...',
     docSearchPlaceholder: 'Поиск документов...',

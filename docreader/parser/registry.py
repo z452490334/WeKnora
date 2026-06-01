@@ -5,6 +5,7 @@ from docreader.parser.base_parser import BaseParser
 from docreader.parser.doc_parser import DocParser
 from docreader.parser.docx2_parser import Docx2Parser
 from docreader.parser.excel_parser import ExcelParser
+from docreader.parser.html_parser import HTMLParser
 from docreader.parser.image_parser import ImageParser
 from docreader.parser.markdown_parser import MarkdownParser
 from docreader.parser.markitdown_parser import MarkitdownParser
@@ -125,6 +126,8 @@ def _build_default_registry() -> ParserEngineRegistry:
             "pdf": PDFParser,
             "md": MarkdownParser,
             "markdown": MarkdownParser,
+            "html": HTMLParser,
+            "htm": HTMLParser,
             "xlsx": ExcelParser,
             "xls": ExcelParser,
             **_image_types,
@@ -145,6 +148,8 @@ def _build_default_registry() -> ParserEngineRegistry:
             "xlsx": MarkitdownParser,
             "xls": MarkitdownParser,
             "csv": MarkitdownParser,
+            "html": MarkitdownParser,
+            "htm": MarkitdownParser,
         },
         description="MarkItDown 解析引擎（微软 MarkItDown 库）",
     )

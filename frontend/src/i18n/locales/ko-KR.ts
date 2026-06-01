@@ -365,7 +365,7 @@ export default {
     noDescription: "설명 없음",
     emptyKnowledgeDragDrop: "지식이 비어 있음, 드래그 앤 드롭으로 업로드",
     pdfDocFormat: "pdf, doc 형식 파일, 최대 10MB",
-    textMarkdownFormat: "text, markdown 형식 파일, 최대 200KB",
+    textMarkdownFormat: "text, markdown, html 형식 파일, 최대 200KB",
     dragFileNotText: "텍스트나 링크가 아닌 파일을 드래그하세요",
     searchPlaceholder: "지식베이스 검색...",
     docSearchPlaceholder: "문서 이름 검색...",

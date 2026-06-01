@@ -362,7 +362,7 @@ export default {
     noDescription: "无描述",
     emptyKnowledgeDragDrop: "知识为空，拖放上传",
     pdfDocFormat: "pdf、doc 格式文件，不超过10M",
-    textMarkdownFormat: "text、markdown格式文件，不超过200K",
+    textMarkdownFormat: "text、markdown、html格式文件，不超过200K",
     dragFileNotText: "请拖拽文件而不是文本或链接",
     searchPlaceholder: "搜索知识库...",
     docSearchPlaceholder: "搜索文档名称...",

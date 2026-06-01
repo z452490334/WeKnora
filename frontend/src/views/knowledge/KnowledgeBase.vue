@@ -2168,7 +2168,7 @@ async function createNewSession(value: string): Promise<void> {
 
       <template v-if="activeKbTab === 'documents' || !isWiki">
         <input ref="uploadInputRef" type="file" class="document-upload-input"
-          :accept="acceptFileTypes || '.pdf,.docx,.doc,.txt,.md,.json,.jpg,.jpeg,.png,.csv,.xlsx,.xls,.pptx,.ppt,.mp3,.wav,.m4a,.flac,.ogg'"
+          :accept="acceptFileTypes || '.pdf,.docx,.doc,.txt,.md,.markdown,.html,.htm,.json,.jpg,.jpeg,.png,.csv,.xlsx,.xls,.pptx,.ppt,.mp3,.wav,.m4a,.flac,.ogg'"
           multiple @change="handleDocumentUpload" />
         <input ref="folderUploadInputRef" type="file" class="document-upload-input" webkitdirectory
           @change="handleFolderUpload" />

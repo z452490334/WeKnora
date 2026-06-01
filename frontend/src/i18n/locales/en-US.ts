@@ -358,7 +358,7 @@ export default {
     noDescription: 'No description',
     emptyKnowledgeDragDrop: 'Knowledge is empty, drag and drop to upload',
     pdfDocFormat: 'pdf, doc format files, max 10M',
-    textMarkdownFormat: 'text, markdown format files, max 200K',
+    textMarkdownFormat: 'text, markdown, html format files, max 200K',
     dragFileNotText: 'Please drag files instead of text or links',
     searchPlaceholder: 'Search knowledge bases...',
     docSearchPlaceholder: 'Search document names...',
