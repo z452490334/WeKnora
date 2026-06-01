@@ -297,6 +297,14 @@
           </p>
         </div>
 
+        <!-- Embedding 专用：输入 Token 上限 -->
+        <div v-if="modelType === 'embedding'" class="form-item">
+          <label class="form-label">{{ $t('model.editor.truncateTokensLabel') }}</label>
+          <t-input v-model.number="formData.truncatePromptTokens" type="number" :min="0" :max="8192"
+            :placeholder="$t('model.editor.truncateTokensPlaceholder')" />
+          <p class="form-desc">{{ $t('model.editor.truncateTokensDesc') }}</p>
+        </div>
+
         <!-- Chat: supports vision toggle (VLLM models are inherently multimodal) -->
         <div v-if="modelType === 'chat'" class="form-item">
           <label class="form-label">{{ $t('model.editor.supportsVisionLabel') }}</label>
@@ -345,6 +353,7 @@ interface ModelFormData {
   baseUrl?: string
   apiKey?: string
   dimension?: number
+  truncatePromptTokens?: number
   interfaceType?: 'ollama' | 'openai'
   isDefault: boolean
   supportsVision?: boolean
@@ -654,6 +663,7 @@ const formData = ref<ModelFormData>({
   baseUrl: '',
   apiKey: '',
   dimension: undefined,
+  truncatePromptTokens: undefined,
   interfaceType: 'ollama',
   isDefault: false,
   supportsVision: false,
@@ -839,6 +849,7 @@ const resetForm = () => {
     baseUrl: '',
     apiKey: '',
     dimension: undefined, // 默认不填，让用户手动输入或通过检测按钮获取
+    truncatePromptTokens: undefined,
     interfaceType: undefined,
     isDefault: false,
     supportsVision: false,

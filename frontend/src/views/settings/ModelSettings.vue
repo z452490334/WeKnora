@@ -181,6 +181,7 @@ function convertToLegacyFormat(model: ModelConfig) {
     apiKey: '',
     provider: model.parameters.provider || '',
     dimension: model.parameters.embedding_parameters?.dimension,
+    truncatePromptTokens: model.parameters.embedding_parameters?.truncate_prompt_tokens,
     isBuiltin: model.is_builtin || false,
     supportsVision: model.parameters.supports_vision || false,
     customHeaders: model.parameters.custom_headers
@@ -289,6 +290,13 @@ const emptyHint = computed(() => {
   return map[activeTypeFilter.value as ModelType]
 })
 
+const normalizeTruncatePromptTokens = (value: unknown) => {
+  if (value === undefined || value === null || value === '') {
+    return 0
+  }
+  return Number(value)
+}
+
 // 加载模型列表
 const loadModels = async () => {
   loading.value = true
@@ -377,6 +385,11 @@ const handleModelSave = async (modelData: any) => {
         MessagePlugin.warning(t('modelSettings.toasts.dimensionInvalid'))
         return
       }
+      const truncatePromptTokens = normalizeTruncatePromptTokens(modelData.truncatePromptTokens)
+      if (!Number.isInteger(truncatePromptTokens) || truncatePromptTokens < 0 || truncatePromptTokens > 8192) {
+        MessagePlugin.warning(t('modelSettings.toasts.truncateTokensInvalid'))
+        return
+      }
     }
 
     const customHeadersMap: Record<string, string> = {}
@@ -411,7 +424,7 @@ const handleModelSave = async (modelData: any) => {
         ...(currentModelType.value === 'embedding' && modelData.dimension ? {
           embedding_parameters: {
             dimension: modelData.dimension,
-            truncate_prompt_tokens: 0
+            truncate_prompt_tokens: normalizeTruncatePromptTokens(modelData.truncatePromptTokens)
           }
         } : {}),
         ...(currentModelType.value === 'vllm' ? {
