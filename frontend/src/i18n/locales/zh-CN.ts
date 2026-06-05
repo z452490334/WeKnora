@@ -1231,6 +1231,7 @@ export default {
       use_tls: "使用 TLS",
       scheme: "协议",
       grpc_address: "gRPC 地址",
+      database: "数据库名",
       use_default_connection: "使用默认连接",
       index_name: "索引名称",
       number_of_shards: "分片数",
@@ -2545,6 +2546,27 @@ export default {
       truncateTokensDesc: "传给 Embedding 模型的单次输入上限。0 或留空表示使用系统默认；Ollama 会作为 num_ctx 使用。",
       supportsVisionLabel: "支持视觉/多模态",
       supportsVisionDesc: "模型是否支持图片等多模态输入",
+      thinkingControlLabel: "思考模式参数格式",
+      thinkingControlDesc:
+        "决定智能体「思考模式」开/关时如何写入 API。已尝试按厂商/模型预选，若与实际情况不符请按 API 文档手动修改；选「不写入」时，智能体「思考模式」开关不生效。",
+      thinkingControl: {
+        none: {
+          label: "不写入思考参数",
+          hint: "智能体「思考模式」开关不生效，不会在请求中写入思考相关参数",
+        },
+        chatTemplateKwargs: {
+          label: "chat_template_kwargs",
+          hint: "自定义 OpenAI 兼容、NVIDIA NIM、vLLM / 本地 Qwen 部署",
+        },
+        enableThinking: {
+          label: "enable_thinking",
+          hint: "阿里云 DashScope：qwen3、qwen-plus、qwen-max、qwen-turbo",
+        },
+        thinkingType: {
+          label: "thinking.type",
+          hint: "火山引擎 Ark；腾讯云 LKEAP（DeepSeek V3 等，选 LKEAP 时默认此项；R1 请改「不写入」）",
+        },
+      },
       dimensionHint: '模型已选择，点击"检测维度"按钮自动获取向量维度',
       loadModelListFailed: "加载模型列表失败",
       listRefreshed: "列表已刷新",
