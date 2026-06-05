@@ -9,6 +9,10 @@ from docreader.parser.html_parser import HTMLParser
 from docreader.parser.image_parser import ImageParser
 from docreader.parser.markdown_parser import MarkdownParser
 from docreader.parser.markitdown_parser import MarkitdownParser
+from docreader.parser.opendataloader_parser import (
+    OpenDataLoaderParser,
+    opendataloader_available,
+)
 from docreader.parser.pdf_parser import PDFParser
 
 logger = logging.getLogger(__name__)
@@ -152,6 +156,14 @@ def _build_default_registry() -> ParserEngineRegistry:
             "htm": MarkitdownParser,
         },
         description="MarkItDown 解析引擎（微软 MarkItDown 库）",
+    )
+
+    reg.register(
+        "opendataloader",
+        {"pdf": OpenDataLoaderParser},
+        description="OpenDataLoader PDF（版面分析，需 Java 11+）",
+        check_available=opendataloader_available,
+        unavailable_hint="请安装 opendataloader-pdf 与 Java 11+",
     )
 
     # NOTE: Engine listing is managed by Go-side engine registry
