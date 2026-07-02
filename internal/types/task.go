@@ -1,5 +1,28 @@
 package types
 
+// Asynq queue names. MUST stay in sync with the Queues weight map in
+// router.NewAsynqServer — a task enqueued to a queue that the server does not
+// list will never be consumed.
+const (
+	QueueCritical   = "critical"
+	QueueDefault    = "default"
+	QueueLow        = "low"
+	// QueueMultimodal isolates high-volume, slow VLM image tasks (OCR + caption)
+	// so a single large scanned PDF (hundreds–thousands of page images) cannot
+	// saturate the shared worker pool and block user-facing document parsing in
+	// the default queue.
+	QueueMultimodal = "multimodal"
+	// QueueGraph isolates high-volume, slow graph-extraction tasks (one per
+	// chunk, LLM-backed, only when Neo4j is enabled). Same rationale as
+	// QueueMultimodal: a large document must not flood the default queue.
+	QueueGraph = "graph"
+	// QueueQuestion isolates high-volume, slow question-generation tasks (one
+	// per 20-chunk batch, LLM-backed). Keeps a large document's hundreds of
+	// question batches from starving the lightweight tasks in the low queue
+	// (summary, deletes, wiki ingest).
+	QueueQuestion = "question"
+)
+
 const (
 	TypeChunkExtract         = "chunk:extract"
 	TypeDocumentProcess      = "document:process"       // 文档处理任务
@@ -10,6 +33,7 @@ const (
 	TypeIndexDelete          = "index:delete"           // 索引删除任务
 	TypeKBDelete             = "kb:delete"              // 知识库删除任务
 	TypeKnowledgeListDelete  = "knowledge:list_delete"  // 批量删除知识任务
+	TypeKnowledgeListReparse = "knowledge:list_reparse" // 批量重解析知识任务
 	TypeKnowledgeMove        = "knowledge:move"         // 知识移动任务
 	TypeDataTableSummary     = "datatable:summary"      // 表格摘要任务
 	TypeImageMultimodal      = "image:multimodal"       // 图片多模态处理任务（OCR + VLM Caption）
@@ -176,6 +200,14 @@ type KnowledgeListDeletePayload struct {
 	TracingContext
 	TenantID     uint64   `json:"tenant_id"`
 	KnowledgeIDs []string `json:"knowledge_ids"`
+}
+
+// KnowledgeListReparsePayload represents the batch knowledge reparse task payload
+type KnowledgeListReparsePayload struct {
+	TracingContext
+	TenantID      uint64                      `json:"tenant_id"`
+	KnowledgeIDs  []string                    `json:"knowledge_ids"`
+	ProcessConfig *KnowledgeProcessOverrides `json:"process_config,omitempty"`
 }
 
 // KnowledgeMovePayload represents the knowledge move task payload

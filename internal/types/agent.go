@@ -32,6 +32,10 @@ type AgentConfig struct {
 	// MCP service selection
 	MCPSelectionMode string   `json:"mcp_selection_mode"` // MCP selection mode: "all", "selected", "none"
 	MCPServices      []string `json:"mcp_services"`       // Selected MCP service IDs (when mode is "selected")
+	// MCPAuthWaitTimeout is how many seconds an agent run waits for
+	// in-conversation OAuth authorization before skipping. <=0 falls back to
+	// the gate's configured timeout. The wait is always bounded (no leak).
+	MCPAuthWaitTimeout int `json:"mcp_auth_wait_timeout,omitempty"`
 	// Whether to enable thinking mode (for models that support extended thinking)
 	Thinking *bool `json:"thinking"`
 	// Whether to retrieve knowledge base only when explicitly mentioned with @ (default: false)
@@ -47,6 +51,9 @@ type AgentConfig struct {
 
 	// Runtime-only fields (not persisted)
 	VLMModelID string `json:"-"` // VLM model ID for tool result image analysis (set from CustomAgent config)
+	// Per-request @mention pins (runtime only; injected as <must_use> in the user message).
+	PinnedMCPServiceIDs []string `json:"-"`
+	PinnedSkillNames    []string `json:"-"`
 	// LLM call timeout in seconds (default: 120). Controls the maximum time for a single LLM call.
 	LLMCallTimeout int `json:"llm_call_timeout,omitempty"`
 
@@ -176,12 +183,13 @@ type ToolResult struct {
 
 // ToolCall represents a single tool invocation within an agent step
 type ToolCall struct {
-	ID         string                 `json:"id"`                   // Function call ID from LLM
-	Name       string                 `json:"name"`                 // Tool name
-	Args       map[string]interface{} `json:"args"`                 // Tool arguments
-	Result     *ToolResult            `json:"result"`               // Execution result (contains Output)
-	Reflection string                 `json:"reflection,omitempty"` // Agent's reflection on this tool call result (if enabled)
-	Duration   int64                  `json:"duration"`             // Execution time in milliseconds
+	ID               string                 `json:"id"`                          // Function call ID from LLM
+	Name             string                 `json:"name"`                        // Tool name
+	Args             map[string]interface{} `json:"args"`                        // Tool arguments
+	Result           *ToolResult            `json:"result"`                      // Execution result (contains Output)
+	Reflection       string                 `json:"reflection,omitempty"`        // Agent's reflection on this tool call result (if enabled)
+	Duration         int64                  `json:"duration"`                    // Execution time in milliseconds
+	ProviderMetadata ToolCallMetadata       `json:"provider_metadata,omitempty"` // Provider-specific tool-call state for replay
 }
 
 // AgentStep represents one iteration of the ReAct loop

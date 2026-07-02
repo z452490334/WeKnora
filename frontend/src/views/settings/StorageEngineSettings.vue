@@ -167,7 +167,7 @@
           :class="[
             'footer-test-message',
             currentCheckState.result.ok
-              ? (currentCheckState.result.bucket_created ? 'created' : 'success')
+              ? ((currentCheckState.result as { bucket_created?: boolean }).bucket_created ? 'created' : 'success')
               : 'error'
           ]"
           :title="currentCheckState.result.message"
@@ -1628,7 +1628,6 @@ onMounted(loadAll)
   }
 }
 </style>
-
 <!--
   Non-scoped block: per-engine header icon coloring. The drawer panel is
   rendered into the component tree (no teleport since attach is unset),

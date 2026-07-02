@@ -116,6 +116,8 @@ type Tenant struct {
 	ChatHistoryConfig *ChatHistoryConfig `yaml:"chat_history_config" json:"chat_history_config" gorm:"type:jsonb"`
 	// Retrieval config: global search/retrieval parameters shared by knowledge search and message search
 	RetrievalConfig *RetrievalConfig `yaml:"retrieval_config" json:"retrieval_config" gorm:"type:jsonb"`
+	// API principal config: controls how X-API-Key requests map to terminal principals.
+	APIPrincipalConfig *APIPrincipalConfig `yaml:"api_principal_config" json:"-" gorm:"type:jsonb"`
 	// Creation time
 	CreatedAt time.Time `yaml:"created_at"          json:"created_at"`
 	// Last updated time
@@ -215,6 +217,63 @@ type WeKnoraCloudCredentials struct {
 	AppSecret string `json:"app_secret"`
 }
 
+type APIPrincipalMode string
+
+const (
+	APIPrincipalModeTenant      APIPrincipalMode = "tenant"
+	APIPrincipalModeDirect      APIPrincipalMode = "direct_header"
+	APIPrincipalModeSignedToken APIPrincipalMode = "signed_token"
+)
+
+// APIPrincipalConfig controls how tenant API-key requests map to terminal
+// principals. Direct header mode is low-assurance and should only be used for
+// trusted server-to-server calls; signed-token mode verifies the user claim.
+type APIPrincipalConfig struct {
+	Mode                  APIPrincipalMode `json:"mode"`
+	DirectHeaderName      string           `json:"direct_header_name,omitempty"`
+	SignedTokenHeaderName string           `json:"signed_token_header_name,omitempty"`
+	// RequireDirectHeader, when true in direct_header mode, rejects API-key
+	// requests that omit the configured user-id header instead of falling
+	// back to the tenant-level principal.
+	RequireDirectHeader bool   `json:"require_direct_header,omitempty"`
+	HMACSecret          string `json:"hmac_secret,omitempty"`
+}
+
+func (c *APIPrincipalConfig) Value() (driver.Value, error) {
+	if c == nil {
+		return nil, nil
+	}
+	cp := *c
+	if cp.HMACSecret != "" {
+		if key := utils.GetAESKey(); key != nil {
+			if encrypted, err := utils.EncryptAESGCM(cp.HMACSecret, key); err == nil {
+				cp.HMACSecret = encrypted
+			}
+		}
+	}
+	return json.Marshal(&cp)
+}
+
+func (c *APIPrincipalConfig) Scan(value interface{}) error {
+	if value == nil {
+		return nil
+	}
+	b, ok := value.([]byte)
+	if !ok {
+		return nil
+	}
+	if err := json.Unmarshal(b, c); err != nil {
+		return err
+	}
+	if plain, ok := utils.DecryptStoredSecretLenient(c.HMACSecret); ok {
+		c.HMACSecret = plain
+	} else {
+		log.Printf("[crypto] tenant api_principal_config.hmac_secret: decrypt failed (SYSTEM_AES_KEY missing/rotated?), treating as unconfigured")
+		c.HMACSecret = ""
+	}
+	return nil
+}
+
 // GetWeKnoraCloud returns the WeKnoraCloud credentials, or nil if not configured.
 func (c *CredentialsConfig) GetWeKnoraCloud() *WeKnoraCloudCredentials {
 	if c == nil || c.WeKnoraCloud == nil {
@@ -285,6 +344,24 @@ type ParserEngineConfig struct {
 	MinerUCloudEnableTable   *bool  `json:"mineru_cloud_enable_table,omitempty"`
 	MinerUCloudEnableOCR     *bool  `json:"mineru_cloud_enable_ocr,omitempty"`
 	MinerUCloudLanguage      string `json:"mineru_cloud_language,omitempty"`
+
+	// OpenDataLoader PDF (docreader engine); hybrid requires opendataloader-pdf-hybrid service.
+	ODLHybrid           string `json:"odl_hybrid,omitempty"`      // off (default), docling-fast, hancom-ai
+	ODLHybridURL        string `json:"odl_hybrid_url,omitempty"`  // e.g. http://odl-hybrid:5002
+	ODLHybridMode       string `json:"odl_hybrid_mode,omitempty"` // auto, full
+	ODLHybridFallback   *bool  `json:"odl_hybrid_fallback,omitempty"`
+	ODLMarkdownWithHTML *bool  `json:"odl_markdown_with_html,omitempty"`
+
+	// PaddleOCR-VL self-hosted pipeline service (full /layout-parsing API).
+	PaddleOCRVLEndpoint            string `json:"paddleocr_vl_endpoint,omitempty"` // e.g. http://paddleocr-vl:8080
+	PaddleOCRVLUseSealRecognition  *bool  `json:"paddleocr_vl_use_seal_recognition,omitempty"`
+	PaddleOCRVLUseChartRecognition *bool  `json:"paddleocr_vl_use_chart_recognition,omitempty"`
+
+	// PaddleOCR-VL AI Studio cloud API.
+	PaddleOCRVLCloudToken               string `json:"paddleocr_vl_cloud_token,omitempty"`
+	PaddleOCRVLCloudModel               string `json:"paddleocr_vl_cloud_model,omitempty"` // e.g. PaddleOCR-VL-1.6
+	PaddleOCRVLCloudUseSealRecognition  *bool  `json:"paddleocr_vl_cloud_use_seal_recognition,omitempty"`
+	PaddleOCRVLCloudUseChartRecognition *bool  `json:"paddleocr_vl_cloud_use_chart_recognition,omitempty"`
 }
 
 // ToOverridesMap returns a map suitable for ParserEngineOverrides in parse requests.
@@ -332,6 +409,42 @@ func (c *ParserEngineConfig) ToOverridesMap() map[string]string {
 	}
 	if c.MinerUCloudLanguage != "" {
 		m["mineru_cloud_language"] = c.MinerUCloudLanguage
+	}
+	if c.ODLHybrid != "" {
+		m["odl_hybrid"] = c.ODLHybrid
+	}
+	if c.ODLHybridURL != "" {
+		m["odl_hybrid_url"] = c.ODLHybridURL
+	}
+	if c.ODLHybridMode != "" {
+		m["odl_hybrid_mode"] = c.ODLHybridMode
+	}
+	if c.ODLHybridFallback != nil {
+		m["odl_hybrid_fallback"] = fmt.Sprintf("%v", *c.ODLHybridFallback)
+	}
+	if c.ODLMarkdownWithHTML != nil {
+		m["odl_markdown_with_html"] = fmt.Sprintf("%v", *c.ODLMarkdownWithHTML)
+	}
+	if c.PaddleOCRVLEndpoint != "" {
+		m["paddleocr_vl_endpoint"] = c.PaddleOCRVLEndpoint
+	}
+	if c.PaddleOCRVLUseSealRecognition != nil {
+		m["paddleocr_vl_use_seal_recognition"] = fmt.Sprintf("%v", *c.PaddleOCRVLUseSealRecognition)
+	}
+	if c.PaddleOCRVLUseChartRecognition != nil {
+		m["paddleocr_vl_use_chart_recognition"] = fmt.Sprintf("%v", *c.PaddleOCRVLUseChartRecognition)
+	}
+	if c.PaddleOCRVLCloudToken != "" {
+		m["paddleocr_vl_cloud_token"] = c.PaddleOCRVLCloudToken
+	}
+	if c.PaddleOCRVLCloudModel != "" {
+		m["paddleocr_vl_cloud_model"] = c.PaddleOCRVLCloudModel
+	}
+	if c.PaddleOCRVLCloudUseSealRecognition != nil {
+		m["paddleocr_vl_cloud_use_seal_recognition"] = fmt.Sprintf("%v", *c.PaddleOCRVLCloudUseSealRecognition)
+	}
+	if c.PaddleOCRVLCloudUseChartRecognition != nil {
+		m["paddleocr_vl_cloud_use_chart_recognition"] = fmt.Sprintf("%v", *c.PaddleOCRVLCloudUseChartRecognition)
 	}
 	if len(m) == 0 {
 		return nil

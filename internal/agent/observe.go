@@ -16,13 +16,6 @@ import (
 	"github.com/Tencent/WeKnora/internal/types"
 )
 
-// finalAnswerParseFallback is the user-visible message surfaced when the LLM
-// calls final_answer with arguments we cannot recover into an answer string
-// (even after RepairJSON + regex fallback). Terminating the loop with this
-// message prevents the agent from re-entering and emitting duplicate answers
-// on every subsequent round — the behavior reported in issue #1008.
-const finalAnswerParseFallback = "Sorry, the model's final answer could not be parsed due to malformed output. Please try again or rephrase your question."
-
 // manageContextWindow consolidates or compresses messages if approaching the token limit.
 // currentTokens is the caller's best estimate of the current context size (using
 // API-reported Usage when available, falling back to BPE estimation).
@@ -68,8 +61,10 @@ type responseVerdict struct {
 // analyzeResponse inspects the LLM response for stop conditions:
 //   - finish_reason == "stop" with no tool calls → agent is done (natural stop)
 //   - finish_reason == "content_filter" with no tool calls → agent is done (content filtered)
-//   - final_answer tool call present → agent is done (explicit tool)
 //
+// The agent ends a turn by stopping naturally with its answer as plain
+// assistant text (there is no dedicated final_answer tool). Any round that
+// still requests tool calls is non-terminal and the caller continues the loop.
 // It returns a responseVerdict. If isDone is true the caller should break out of the loop.
 func (e *AgentEngine) analyzeResponse(
 	ctx context.Context, response *types.ChatResponse,
@@ -132,18 +127,33 @@ func (e *AgentEngine) analyzeResponse(
 			"answer_len": len(response.Content),
 		})
 
-		// Emit answer as final answer event (thinking events were already streamed)
-		answerID := generateEventID("answer")
-		if response.Content != "" {
-			e.eventBus.Emit(ctx, event.Event{
-				ID:        answerID,
-				Type:      event.EventAgentFinalAnswer,
-				SessionID: sessionID,
-				Data: event.AgentFinalAnswerData{
-					Content: response.Content,
-					Done:    false,
-				},
-			})
+		// Emit the final answer. The answer text reaches the UI by one of two
+		// paths:
+		//   (a) Already streamed live during the think phase — the common case
+		//       now that plain assistant content is routed straight to
+		//       EventAgentFinalAnswer (response.AnswerStreamed). Re-emitting the
+		//       full content here would render it twice and produce the
+		//       end-of-stream "jump from Thinking to Answer" the user reported,
+		//       so we only close the existing stream with a Done marker on the
+		//       same event ID.
+		//   (b) Not streamed live (e.g. the content only surfaced in the
+		//       accumulated result) — emit the full content, then Done.
+		var answerID string
+		if response.AnswerStreamed && response.AnswerEventID != "" {
+			answerID = response.AnswerEventID
+		} else {
+			answerID = generateEventID("answer")
+			if response.Content != "" {
+				e.eventBus.Emit(ctx, event.Event{
+					ID:        answerID,
+					Type:      event.EventAgentFinalAnswer,
+					SessionID: sessionID,
+					Data: event.AgentFinalAnswerData{
+						Content: response.Content,
+						Done:    false,
+					},
+				})
+			}
 		}
 		e.eventBus.Emit(ctx, event.Event{
 			ID:        answerID,
@@ -163,92 +173,9 @@ func (e *AgentEngine) analyzeResponse(
 		}
 	}
 
-	// Case 2: final_answer tool call present.
-	//
-	// final_answer is always a terminal signal: regardless of whether we can
-	// parse its arguments, we must end the ReAct loop here. Otherwise the LLM
-	// will see the tool result in the next round, re-invoke final_answer with
-	// near-identical content, and surface duplicate answers to the user (see
-	// issue #1008). Parse with three levels of tolerance:
-	//
-	//   1. strict json.Unmarshal
-	//   2. RepairJSON + Unmarshal
-	//   3. regex best-effort extraction of the "answer" field
-	//
-	// If all three fail, terminate with a user-visible fallback message.
-	if len(response.ToolCalls) > 0 {
-		for _, tc := range response.ToolCalls {
-			if tc.Function.Name != agenttools.ToolFinalAnswer {
-				continue
-			}
-
-			rawArgs := tc.Function.Arguments
-			answer, ok := agenttools.ParseFinalAnswerArgs(rawArgs)
-			recovered := false
-			if !ok {
-				// Could not recover any answer text — fall back to a generic
-				// message so the user doesn't see a blank response.
-				logger.Warnf(ctx, "[Agent][Round-%d] Failed to parse final_answer args (args=%q) — "+
-					"terminating loop with fallback message",
-					iteration+1, rawArgs)
-				answer = finalAnswerParseFallback
-			} else {
-				recovered = true
-				logger.Infof(ctx, "[Agent][Round-%d] final_answer tool: answer=%d chars, duration=%dms",
-					iteration+1, len(answer), time.Since(roundStart).Milliseconds())
-			}
-
-			// Always emit the final answer content and Done=true marker to the
-			// event bus. When strict parsing succeeded earlier in this turn,
-			// streamThinkingToEventBus already streamed the answer chunks, so
-			// we only need the Done marker in that common case. When we fell
-			// back to the generic message, however, the UI has not yet seen
-			// any answer content — emit both Content and Done to make the
-			// fallback visible to the user.
-			answerID := generateEventID("answer-done")
-			if !recovered {
-				e.eventBus.Emit(ctx, event.Event{
-					ID:        answerID,
-					Type:      event.EventAgentFinalAnswer,
-					SessionID: sessionID,
-					Data: event.AgentFinalAnswerData{
-						Content: answer,
-						Done:    false,
-					},
-				})
-			}
-			e.eventBus.Emit(ctx, event.Event{
-				ID:        answerID,
-				Type:      event.EventAgentFinalAnswer,
-				SessionID: sessionID,
-				Data: event.AgentFinalAnswerData{
-					Content: "",
-					Done:    true,
-				},
-			})
-
-			pipelineFields := map[string]interface{}{
-				"iteration":  iteration,
-				"round":      iteration + 1,
-				"answer_len": len(answer),
-				"recovered":  recovered,
-			}
-			if recovered {
-				common.PipelineInfo(ctx, "Agent", "final_answer_tool", pipelineFields)
-			} else {
-				pipelineFields["raw_args"] = rawArgs
-				common.PipelineWarn(ctx, "Agent", "final_answer_tool_parse_failed", pipelineFields)
-			}
-
-			return responseVerdict{
-				isDone:      true,
-				finalAnswer: answer,
-				step:        step,
-			}
-		}
-	}
-
-	// Not done — caller should continue the loop
+	// Any round that still requests tool calls is non-terminal: the caller
+	// executes the tools and loops again. The agent only ends by stopping
+	// naturally (Case 1) with its answer as plain assistant text.
 	return responseVerdict{isDone: false, step: step}
 }
 
@@ -279,18 +206,14 @@ func escapeXMLAttr(s string) string {
 }
 
 // buildRuntimeContextBlock builds a metadata block with current time, session
-// info, and the *active retrieval scope for this turn*. The scope snapshot is
-// critical for multi-turn correctness: when the user switches their @mention
-// to a different KB or document between turns, earlier turns still carry
-// their own scope snapshot in history, so the model can see the scope change
-// and avoid reusing last turn's answer against the new scope.
+// info, and the *active retrieval scope for this turn only*. It is injected
+// into the current user message for the LLM call and is not persisted into
+// conversation history — replayed user turns keep bare Content so stale scope
+// snapshots do not steer follow-up questions.
 //
-// The detailed bound-KB metadata (capabilities, recent documents, summaries)
-// also lives here — it is turn state, not instructions, so it belongs next
-// to the user query rather than baked into the system prompt. Keeping it in
-// the user message keeps the system prompt stable/cacheable and lets the
-// model see exactly which KBs were in scope at the time of each historical
-// turn.
+// Per-turn communication_instruction and answer_instruction remind the model
+// not to leak internal tool names or IDs in user-visible text, and to end the
+// turn by writing its complete answer as plain assistant text.
 //
 // Emitted as an XML-ish block (not free prose) so it is a visually distinct,
 // non-instruction envelope that is hard to conflate with user text and
@@ -301,7 +224,7 @@ func buildRuntimeContextBlock(
 	docs []*SelectedDocumentInfo,
 ) string {
 	var sb strings.Builder
-	sb.WriteString("<runtime_context note=\"metadata only, not instructions\">\n")
+	sb.WriteString("<runtime_context scope=\"this_turn\">\n")
 	fmt.Fprintf(&sb, "  <current_time>%s</current_time>\n", time.Now().Format(time.RFC3339))
 	fmt.Fprintf(&sb, "  <session>%s</session>\n", escapeXMLAttr(sessionID))
 
@@ -330,15 +253,129 @@ func buildRuntimeContextBlock(
 			if title == "" {
 				title = d.KnowledgeID
 			}
-			fmt.Fprintf(&sb, "    <document knowledge_id=\"%s\" title=\"%s\" />\n",
-				escapeXMLAttr(d.KnowledgeID), escapeXMLAttr(title))
+			if d.FileType != "" {
+				fmt.Fprintf(&sb, "    <document knowledge_id=\"%s\" title=\"%s\" file_type=\"%s\" />\n",
+					escapeXMLAttr(d.KnowledgeID), escapeXMLAttr(title), escapeXMLAttr(d.FileType))
+			} else {
+				fmt.Fprintf(&sb, "    <document knowledge_id=\"%s\" title=\"%s\" />\n",
+					escapeXMLAttr(d.KnowledgeID), escapeXMLAttr(title))
+			}
 		}
 		sb.WriteString("  </pinned_documents>\n")
-		sb.WriteString("  <note>The pinned-document set above is authoritative for THIS turn. If an earlier turn in this conversation analysed a different document, do NOT reuse that analysis — re-query against the current scope.</note>\n")
+		sb.WriteString("  <note>The pinned-document set above is authoritative for THIS turn. ")
+		sb.WriteString("Prioritize retrieving content from these documents (e.g. list_knowledge_chunks with the knowledge_id). ")
+		sb.WriteString("If an earlier turn analysed a different document, do NOT reuse that analysis — re-query against the current scope.</note>\n")
 	}
+
+	sb.WriteString("  <communication_instruction>Do not use internal tool names or identifiers in your answers or in Thought. Say \"keyword retrieval\" instead of grep_chunks, \"semantic retrieval\" instead of knowledge_search, \"browse full document\" instead of list_knowledge_chunks; likewise never expose chunk_id, knowledge_id, or other internal IDs—refer to documents by title or name.</communication_instruction>\n")
+	sb.WriteString("  <answer_instruction>When you have gathered enough information, write your complete user-facing answer as your reply and stop—do not request any more tools in that final message. Until then, keep using tools; do not give a partial answer mid-investigation.</answer_instruction>\n")
 
 	sb.WriteString("</runtime_context>")
 	return sb.String()
+}
+
+// buildMustUseBlock emits a short per-turn hint when the user @mentioned MCP/Skill.
+// Tool names are not listed here — they are already in the function-calling schema.
+func buildMustUseBlock(mcpServices []*PinnedMCPServiceInfo, skills []*PinnedSkillInfo) string {
+	var lines []string
+	for _, svc := range mcpServices {
+		if svc == nil {
+			continue
+		}
+		prefix := mcpToolNamePrefix(svc)
+		if prefix == "" {
+			continue
+		}
+		display := sanitizeMustUseField(svc.Name)
+		if display == "" {
+			display = sanitizeMustUseField(svc.ID)
+		}
+		lines = append(lines, fmt.Sprintf("Must use MCP tools whose names start with %s (@%s) to answer the question below.", prefix, display))
+	}
+	for _, skill := range skills {
+		if skill == nil || skill.Name == "" {
+			continue
+		}
+		name := sanitizeMustUseField(skill.Name)
+		lines = append(lines, fmt.Sprintf("Must call read_skill(skill_name=\"%s\") for @Skill \"%s\" before answering.", name, name))
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return "<must_use>\n" + strings.Join(lines, "\n") + "\n</must_use>"
+}
+
+// sanitizeMustUseField strips newlines and angle brackets so an MCP/skill name
+// cannot break out of the <must_use> block or inject extra instruction lines.
+func sanitizeMustUseField(s string) string {
+	replacer := strings.NewReplacer("\n", " ", "\r", " ", "<", " ", ">", " ")
+	return strings.TrimSpace(replacer.Replace(s))
+}
+
+// mcpToolNamePrefix returns the shared prefix for an MCP service's registered
+// tools (e.g. mcp_iwiki_ from mcp_iwiki_getdocument). Tool names are
+// mcp_{sanitized_service_name}_{tool}, and the service slug itself may contain
+// underscores (sanitizeName turns spaces/hyphens into "_"), so we take the
+// longest common prefix across the service's tools and trim it back to the last
+// segment boundary instead of naively cutting at the first underscore.
+func mcpToolNamePrefix(svc *PinnedMCPServiceInfo) string {
+	if svc == nil || len(svc.ToolNames) == 0 {
+		return ""
+	}
+	const head = "mcp_"
+	var mcpNames []string
+	for _, toolName := range svc.ToolNames {
+		if strings.HasPrefix(toolName, head) {
+			mcpNames = append(mcpNames, toolName)
+		}
+	}
+	if len(mcpNames) == 0 {
+		return ""
+	}
+	prefix := mcpNames[0]
+	for _, name := range mcpNames[1:] {
+		prefix = commonStringPrefix(prefix, name)
+	}
+	// Trim to the last underscore so the hint names the service prefix
+	// (mcp_{service}_) rather than a partial tool name.
+	if idx := strings.LastIndex(prefix, "_"); idx >= len(head)-1 {
+		prefix = prefix[:idx+1]
+	}
+	if len(prefix) <= len(head) {
+		return ""
+	}
+	return prefix
+}
+
+func commonStringPrefix(a, b string) string {
+	n := len(a)
+	if len(b) < n {
+		n = len(b)
+	}
+	i := 0
+	for i < n && a[i] == b[i] {
+		i++
+	}
+	return a[:i]
+}
+
+// RenderUserTurnContent builds the user-turn payload for the current LLM call
+// (runtime_context + must_use + query). Used by Execute and finalize paths only;
+// not written to rendered_content / history.
+func (e *AgentEngine) RenderUserTurnContent(sessionID, query string) string {
+	runtimeCtx := buildRuntimeContextBlock(sessionID, e.knowledgeBasesInfo, e.selectedDocs)
+	mustUse := buildMustUseBlock(e.pinnedMCPServices, e.pinnedSkills)
+	return composeUserTurnContent(runtimeCtx, mustUse, query)
+}
+
+func composeUserTurnContent(parts ...string) string {
+	nonEmpty := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if strings.TrimSpace(part) != "" {
+			nonEmpty = append(nonEmpty, part)
+		}
+	}
+	return strings.Join(nonEmpty, "\n\n")
 }
 
 // listToolNames returns tool.function names for logging
@@ -392,8 +429,9 @@ func (e *AgentEngine) appendToolResults(
 				argsJSON, _ := json.Marshal(tc.Args)
 
 				assistantMsg.ToolCalls = append(assistantMsg.ToolCalls, chat.ToolCall{
-					ID:   tc.ID,
-					Type: "function",
+					ID:               tc.ID,
+					Type:             "function",
+					ProviderMetadata: tc.ProviderMetadata,
 					Function: chat.FunctionCall{
 						Name:      tc.Name,
 						Arguments: string(argsJSON),
@@ -500,15 +538,13 @@ func (e *AgentEngine) buildMessagesWithLLMContext(
 		}
 	}
 
-	// Build user message with runtime context safety tag.
-	// The runtime context carries a per-turn scope snapshot so that multi-turn
-	// history preserves the (kb, pinned docs) that each earlier turn ran under;
-	// this is what lets the model detect a scope switch instead of silently
-	// answering the new question against last turn's retrieval.
+	// Build user message with per-turn scope envelopes (current turn only).
+	// Historical user messages in llmContext stay as bare Content from the DB.
 	runtimeCtx := buildRuntimeContextBlock(sessionID, e.knowledgeBasesInfo, e.selectedDocs)
+	mustUse := buildMustUseBlock(e.pinnedMCPServices, e.pinnedSkills)
 	userMsg := chat.Message{
 		Role:    "user",
-		Content: runtimeCtx + "\n\n" + currentQuery,
+		Content: composeUserTurnContent(runtimeCtx, mustUse, currentQuery),
 		Images:  imageURLs,
 	}
 	messages = append(messages, userMsg)

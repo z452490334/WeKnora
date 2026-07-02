@@ -38,6 +38,8 @@ type AgentEngine struct {
 	eventBus             *event.EventBus
 	knowledgeBasesInfo   []*KnowledgeBaseInfo      // Detailed knowledge base information for prompt
 	selectedDocs         []*SelectedDocumentInfo   // User-selected documents (via @ mention)
+	pinnedMCPServices    []*PinnedMCPServiceInfo   // User @mentioned MCP services for this turn
+	pinnedSkills         []*PinnedSkillInfo        // User @mentioned skills for this turn
 	sessionID            string                    // Session ID for logging and event emission
 	systemPromptTemplate string                    // System prompt template (optional, uses default if empty)
 	skillsManager        *skills.Manager           // Skills manager for Progressive Disclosure (optional)
@@ -91,6 +93,32 @@ func NewAgentEngine(
 	}
 
 	return engine
+}
+
+// SetPinnedMentions sets per-turn @mention scope for MCP services and skills.
+func (e *AgentEngine) SetPinnedMentions(mcpServices []*PinnedMCPServiceInfo, skills []*PinnedSkillInfo) {
+	e.pinnedMCPServices = mcpServices
+	e.pinnedSkills = skills
+}
+
+func (e *AgentEngine) systemPromptOptions(ctx context.Context) *BuildSystemPromptOptions {
+	opts := &BuildSystemPromptOptions{
+		Language: types.LanguageNameFromContext(ctx),
+		Config:   e.appConfig,
+	}
+	if e.skillsManager != nil && e.skillsManager.IsEnabled() {
+		opts.SkillsMetadata = e.skillsManager.GetAllMetadata()
+	}
+	return opts
+}
+
+func (e *AgentEngine) buildSystemPrompt(ctx context.Context) string {
+	return BuildSystemPromptWithOptions(
+		e.knowledgeBasesInfo,
+		e.config.WebSearchEnabled,
+		e.systemPromptOptions(ctx),
+		e.systemPromptTemplate,
+	)
 }
 
 // NewAgentEngineWithSkills creates a new agent engine with skills support
@@ -220,34 +248,7 @@ func (e *AgentEngine) Execute(
 
 	// Build system prompt using progressive RAG prompt
 	// If skills are enabled, include skills metadata (Level 1 - Progressive Disclosure)
-	// Extract user language from context for prompt placeholder
-	language := types.LanguageNameFromContext(ctx)
-	var systemPrompt string
-	if e.skillsManager != nil && e.skillsManager.IsEnabled() {
-		skillsMetadata := e.skillsManager.GetAllMetadata()
-		systemPrompt = BuildSystemPromptWithOptions(
-			e.knowledgeBasesInfo,
-			e.config.WebSearchEnabled,
-			e.selectedDocs,
-			&BuildSystemPromptOptions{
-				SkillsMetadata: skillsMetadata,
-				Language:       language,
-				Config:         e.appConfig,
-			},
-			e.systemPromptTemplate,
-		)
-	} else {
-		systemPrompt = BuildSystemPromptWithOptions(
-			e.knowledgeBasesInfo,
-			e.config.WebSearchEnabled,
-			e.selectedDocs,
-			&BuildSystemPromptOptions{
-				Language: language,
-				Config:   e.appConfig,
-			},
-			e.systemPromptTemplate,
-		)
-	}
+	systemPrompt := e.buildSystemPrompt(ctx)
 	logger.Debugf(ctx, "[Agent] SystemPrompt: %d chars", len(systemPrompt))
 
 	// Initialize messages with history
@@ -594,7 +595,7 @@ func (e *AgentEngine) runReActIteration(
 		return iterOutcomeBreak, nil
 	}
 
-	// 2. Analyze: Check for stop conditions (natural stop or final_answer tool)
+	// 2. Analyze: Check for stop conditions (natural stop with no tool calls)
 	verdict := e.analyzeResponse(ctx, response, step, state.CurrentRound, sessionID, roundStart)
 	if verdict.isDone {
 		// Guard against empty content: when the LLM stops naturally with no
@@ -607,7 +608,7 @@ func (e *AgentEngine) runReActIteration(
 					round, *emptyRetries, maxEmptyResponseRetries)
 				*messagesPtr = append(*messagesPtr, chat.Message{
 					Role:    "user",
-					Content: "Please provide your answer by calling the final_answer tool.",
+					Content: "Please provide your complete answer now as plain text.",
 				})
 				return iterOutcomeContinue, nil
 			}
@@ -624,6 +625,17 @@ func (e *AgentEngine) runReActIteration(
 		state.RoundSteps = append(state.RoundSteps, verdict.step)
 		return iterOutcomeBreak, nil
 	}
+
+	// This round is non-terminal (it will execute tools and loop again). Any
+	// plain assistant text streamed live to the answer area this round was a
+	// preamble (e.g. "let me search the knowledge base…"), not the final
+	// answer. No explicit retraction signal is emitted: the agent only ends by
+	// stopping naturally with plain text and no tool calls, so the upcoming
+	// tool-call events are themselves the authoritative "that wasn't the final
+	// answer" marker. Both the stream handler and the UI treat any answer text
+	// preceding a tool call in the same stream as a preamble and relocate it
+	// into the steps tree. The preamble is still preserved as this round's
+	// Thought.
 
 	// 3. Act: Execute tool calls
 	e.executeToolCalls(ctx, response, &step, state.CurrentRound, sessionID, assistantMessageID)

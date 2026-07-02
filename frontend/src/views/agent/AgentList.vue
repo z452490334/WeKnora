@@ -10,7 +10,7 @@
             <h2 style="--wails-draggable: drag">{{ $t('agent.title') }}</h2>
             <t-tooltip v-if="authStore.hasRole('contributor')" :content="$t('agent.createAgent')" placement="bottom">
               <t-button variant="text" theme="default" size="small" class="header-action-btn"
-                style="--wails-draggable: no-drag" @click="handleCreateAgent">
+                data-guide="agent-list-create" style="--wails-draggable: no-drag" @click="handleCreateAgent">
                 <template #icon>
                   <span class="btn-icon-wrapper">
                     <svg class="sparkles-icon" width="19" height="19" viewBox="0 0 20 20" fill="none"
@@ -296,11 +296,11 @@
                   <img src="@/assets/img/organization-green.svg" class="org-icon" alt="" aria-hidden="true" />
                   <span class="org-source-text">{{ agent.org_name }}</span>
                 </div>
-                <div v-else-if="agent.is_builtin" class="builtin-badge">
+                <div v-else-if="showAgentBuiltinBadge(agent)" class="builtin-badge">
                   <t-icon name="lock-on" size="12px" />
                   <span>{{ $t('agent.builtin') }}</span>
                 </div>
-                <ResourceOriginBadge v-else :variant="agentOriginVariant(agent)"
+                <ResourceOriginBadge v-else-if="showAgentOriginBadge(agent)" :variant="agentOriginVariant(agent)"
                   :creator-name="(agent as any).creator_name" />
               </div>
             </div>
@@ -483,11 +483,11 @@
                   </div>
                 </div>
                 <!-- 右下角：内置 / 来源徽章（我创建 / 同租户其他成员） -->
-                <div v-if="agent.is_builtin" class="builtin-badge">
+                <div v-if="showAgentBuiltinBadge(agent)" class="builtin-badge">
                   <t-icon name="lock-on" size="12px" />
                   <span>{{ $t('agent.builtin') }}</span>
                 </div>
-                <ResourceOriginBadge v-else :variant="agentOriginVariant(agent)"
+                <ResourceOriginBadge v-else-if="showAgentOriginBadge(agent)" :variant="agentOriginVariant(agent)"
                   :creator-name="(agent as any).creator_name" />
               </div>
             </div>
@@ -631,11 +631,6 @@
                     </t-tooltip>
                   </div>
                 </div>
-                <!-- 右下角：空间图标+名称 -->
-                <div class="card-bottom-source">
-                  <img src="@/assets/img/organization-green.svg" class="org-icon" alt="" aria-hidden="true" />
-                  <span class="org-source-text">{{ shared.org_name }}</span>
-                </div>
               </div>
             </div>
           </template>
@@ -647,7 +642,7 @@
           <span class="empty-txt">{{ $t('agent.empty.title') }}</span>
           <span class="empty-desc">{{ $t('agent.empty.description') }}</span>
           <t-button v-if="authStore.hasRole('contributor')" class="agent-create-btn empty-state-btn"
-            @click="handleCreateAgent">
+            data-guide="agent-list-create" @click="handleCreateAgent">
             <template #icon>
               <span class="btn-icon-wrapper">
                 <svg class="sparkles-icon" width="18" height="18" viewBox="0 0 20 20" fill="none"
@@ -807,8 +802,12 @@
     <!-- 智能体编辑器弹窗 -->
     <AgentEditorModal :visible="editorVisible" :mode="editorMode" :agent="editingAgent"
       :initialSection="editorInitialSection"
+      :initialHighlightField="editorInitialHighlightField"
       :readOnly="editorMode === 'edit' && editingAgent != null && !canManageAgent(editingAgent as AgentWithUI)"
       @update:visible="editorVisible = $event" @success="handleEditorSuccess" />
+
+    <TenantModelsGuide :when="showAgentTenantModelsGuide" variant="agent" />
+    <ContextualGuide tour="agentList" :when="showAgentListContextualGuide" />
   </div>
 </template>
 
@@ -816,7 +815,8 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { MessagePlugin, Icon as TIcon } from 'tdesign-vue-next'
-import { listAgents, deleteAgent, copyAgent, type CustomAgent } from '@/api/agent'
+import { deleteAgent, copyAgent, type CustomAgent } from '@/api/agent'
+import { useChatResourcesStore } from '@/stores/chatResources'
 import { formatStringDate } from '@/utils/index'
 import { useI18n } from 'vue-i18n'
 import { createSessions } from '@/api/chat/index'
@@ -826,9 +826,15 @@ import { useSettingsStore } from '@/stores/settings'
 import { useMenuStore } from '@/stores/menu'
 import type { SharedAgentInfo, OrganizationSharedAgentItem } from '@/api/organization'
 import AgentEditorModal from './AgentEditorModal.vue'
+import ContextualGuide from '@/components/ContextualGuide.vue'
+import TenantModelsGuide from '@/components/TenantModelsGuide.vue'
+import { markContextualGuideDone } from '@/config/contextualGuides'
+import { useTenantModelReadiness } from '@/composables/useTenantModelReadiness'
+import { useUIStore } from '@/stores/ui'
 import AgentAvatar from '@/components/AgentAvatar.vue'
 import ListSpaceSidebar from '@/components/ListSpaceSidebar.vue'
 import ResourceOriginBadge from '@/components/ResourceOriginBadge.vue'
+import { shouldShowResourceOriginBadge } from '@/utils/card-list-badge'
 import { useAuthStore } from '@/stores/auth'
 import { useListUrlState } from '@/composables/useListUrlState'
 import { useResourcePins } from '@/composables/useResourcePins'
@@ -837,7 +843,10 @@ const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
+const uiStore = useUIStore()
 const orgStore = useOrganizationStore()
+const chatResources = useChatResourcesStore()
+const { loaded: modelsReadyLoaded, isReadyForAgent } = useTenantModelReadiness()
 
 interface AgentWithUI extends CustomAgent {
   showMore?: boolean
@@ -1071,25 +1080,44 @@ const editorVisible = ref(false)
 const editorMode = ref<'create' | 'edit'>('create')
 const editingAgent = ref<CustomAgent | null>(null)
 const editorInitialSection = ref<string>('basic')
+const editorInitialHighlightField = ref<string>('')
 /** 当前打开三点菜单的卡片 agent.id（用于受控弹出层，避免 computed 项无持久引用导致菜单不响应） */
 const openMoreAgentId = ref<string | null>(null)
 
-const fetchList = () => {
+const showAgentListEmpty = computed(() => {
+  if (loading.value) return false
+  if (!authStore.hasRole('contributor')) return false
+  if (spaceSelection.value === 'all' && filteredAgents.value.length === 0) return true
+  if (spaceSelection.value === 'mine' && agents.value.length === 0) return true
+  return false
+})
+
+const showAgentTenantModelsGuide = computed(
+  () => modelsReadyLoaded.value && showAgentListEmpty.value && !isReadyForAgent.value,
+)
+
+const showAgentListContextualGuide = computed(
+  () => showAgentListEmpty.value && isReadyForAgent.value && !editorVisible.value,
+)
+
+const applyAgentListData = (res: { data: CustomAgent[]; disabled_own_agent_ids: string[] }) => {
+  const disabledOwnIds = res.disabled_own_agent_ids || []
+  agents.value = (res.data || []).map((agent: CustomAgent) => ({
+    ...agent,
+    showMore: false,
+    disabled_by_me: disabledOwnIds.includes(agent.id)
+  }))
+  checkAndOpenEditModal()
+}
+
+const fetchList = (force = false) => {
   loading.value = true
   return Promise.all([
-    listAgents({ creator: creatorFilter.value }).then((res: any) => {
-      const data = res.data || []
-      const disabledOwnIds = res.disabled_own_agent_ids || []
-      agents.value = data.map((agent: CustomAgent) => ({
-        ...agent,
-        showMore: false,
-        disabled_by_me: disabledOwnIds.includes(agent.id)
-      }))
-      checkAndOpenEditModal()
-    }),
-    orgStore.fetchSharedAgents(),
-    orgStore.fetchOrganizations()
+    chatResources.fetchAgentsForList({ creator: creatorFilter.value }, force).then(applyAgentListData),
+    orgStore.fetchOrganizations({ force }),
+    orgStore.fetchSharedAgents({ force }),
   ]).finally(() => { loading.value = false }).then(() => {
+    checkAndOpenEditModal()
     // 各空间智能体数量已由 GET /organizations 的 resource_counts 带回，存于 orgStore.resourceCounts
     const counts = orgStore.resourceCounts?.agents?.by_organization
     if (counts) spaceAgentCountByOrg.value = { ...counts }
@@ -1097,20 +1125,42 @@ const fetchList = () => {
 }
 
 // 检查 URL 参数并打开编辑模态框
+const resolveAgentForEdit = (editId: string, sourceTenantId?: string): CustomAgent | null => {
+  const own = agents.value.find(a => a.id === editId)
+  if (own) return own
+  if (sourceTenantId) {
+    const shared = sharedAgents.value.find(
+      s => s.agent?.id === editId && String(s.source_tenant_id) === sourceTenantId,
+    )
+    if (shared?.agent) return shared.agent as CustomAgent
+  }
+  return null
+}
+
 const checkAndOpenEditModal = () => {
   const editId = route.query.edit as string
   const section = route.query.section as string
+  const sourceTenantId = route.query.sourceTenantId as string | undefined
+  if (editId && (section === 'im' || section === 'embed' || section === 'integrations')) {
+    const tab = section === 'embed' ? 'embed' : 'im'
+    router.replace({
+      path: '/platform/integrations',
+      query: { tab, agentId: editId },
+    })
+    return
+  }
   if (editId) {
-    const agent = agents.value.find(a => a.id === editId)
+    const agent = resolveAgentForEdit(editId, sourceTenantId)
     if (agent) {
       editingAgent.value = agent
       editorMode.value = 'edit'
       editorInitialSection.value = section || 'basic'
+      editorInitialHighlightField.value = (route.query.highlight as string) || ''
       editorVisible.value = true
     }
     // Drop the transient edit/section params but preserve other filter
     // state (scope / creator / q) so refreshing doesn't reset the view.
-    const { edit: _e, section: _s, ...rest } = route.query
+    const { edit: _e, section: _s, highlight: _h, sourceTenantId: _st, ...rest } = route.query
     router.replace({ path: route.path, query: rest })
   }
 }
@@ -1122,7 +1172,7 @@ const checkAndOpenEditModal = () => {
 watch(
   () => route.query.edit,
   (v) => {
-    if (v && agents.value.length > 0) {
+    if (v && (agents.value.length > 0 || sharedAgents.value.length > 0)) {
       checkAndOpenEditModal()
     }
   },
@@ -1158,7 +1208,7 @@ watch(spaceSelection, (val) => {
 // predicate uniformly (also keeps built-in agents always present, see
 // the matching block in custom_agent.go).
 watch(creatorFilter, () => {
-  fetchList()
+  fetchList(true)
 })
 
 onMounted(() => {
@@ -1258,6 +1308,8 @@ const handleEdit = (agent: AgentWithUI) => {
   openMoreAgentId.value = null
   editingAgent.value = agent
   editorMode.value = 'edit'
+  editorInitialSection.value = 'basic'
+  editorInitialHighlightField.value = ''
   editorVisible.value = true
 }
 
@@ -1289,6 +1341,24 @@ function isMyAgent(agent: { created_by?: string }): boolean {
 // 内建 agent 走 v-else 前的 builtin 分支，到不了这里。
 function agentOriginVariant(agent: { created_by?: string }): 'mine' | 'creator' {
   return isMyAgent(agent) ? 'mine' : 'creator'
+}
+
+function showAgentOriginBadge(agent: { created_by?: string; creator_name?: string }): boolean {
+  return shouldShowResourceOriginBadge({
+    section: agentSectionOf(agent),
+    variant: agentOriginVariant(agent),
+    creatorName: (agent as any).creator_name,
+    showSectionHeaders: showShareGroupHeaders.value,
+  })
+}
+
+function showAgentBuiltinBadge(agent: { is_builtin?: boolean }): boolean {
+  if (!agent.is_builtin) return false
+  return shouldShowResourceOriginBadge({
+    section: agentSectionOf(agent),
+    variant: 'mine',
+    showSectionHeaders: showShareGroupHeaders.value,
+  })
 }
 
 // 共享 agent 的可编辑/只读分组开关，与 KB 列表逻辑保持一致：仅对
@@ -1399,7 +1469,7 @@ const handleCopy = (agent: AgentWithUI) => {
   copyAgent(agent.id).then((res: any) => {
     if (res.data) {
       MessagePlugin.success(t('agent.messages.copied'))
-      fetchList()
+      fetchList(true)
     } else {
       MessagePlugin.error(res.message || t('agent.messages.copyFailed'))
     }
@@ -1415,7 +1485,7 @@ const handleToggleDisabled = (agent: AgentWithUI) => {
   setSharedAgentDisabledByMe(agent.id, nextDisabled).then((res: any) => {
     if (res.success) {
       MessagePlugin.success(nextDisabled ? t('agent.messages.disabled') : t('agent.messages.enabled'))
-      fetchList()
+      fetchList(true)
     } else {
       MessagePlugin.error(res.message || t('agent.messages.saveFailed'))
     }
@@ -1432,7 +1502,7 @@ const handleToggleSharedDisabled = (agent: DisplayAgent) => {
   setSharedAgentDisabledByMe(agent.id, nextDisabled).then((res: any) => {
     if (res.success) {
       MessagePlugin.success(nextDisabled ? t('agent.messages.disabled') : t('agent.messages.enabled'))
-      orgStore.fetchSharedAgents()
+      orgStore.fetchSharedAgents({ force: true })
     } else {
       MessagePlugin.error(res.message || t('agent.messages.saveFailed'))
     }
@@ -1448,7 +1518,7 @@ const handleToggleSharedDisabledFromShared = (shared: SharedAgentInfo) => {
   setSharedAgentDisabledByMe(shared.agent.id, nextDisabled).then((res: any) => {
     if (res.success) {
       MessagePlugin.success(nextDisabled ? t('agent.messages.disabled') : t('agent.messages.enabled'))
-      orgStore.fetchSharedAgents()
+      orgStore.fetchSharedAgents({ force: true })
     } else {
       MessagePlugin.error(res.message || t('agent.messages.saveFailed'))
     }
@@ -1465,7 +1535,7 @@ const confirmDelete = () => {
       MessagePlugin.success(t('agent.messages.deleted'))
       deleteVisible.value = false
       deletingAgent.value = null
-      fetchList()
+      fetchList(true)
     } else {
       MessagePlugin.error(res.message || t('agent.messages.deleteFailed'))
     }
@@ -1474,10 +1544,12 @@ const confirmDelete = () => {
   })
 }
 
-const handleEditorSuccess = () => {
-  editorVisible.value = false
-  editingAgent.value = null
-  fetchList()
+const handleEditorSuccess = (agent?: CustomAgent) => {
+  if (agent) {
+    editingAgent.value = agent
+    editorMode.value = 'edit'
+  }
+  fetchList(true)
 }
 
 const formatDate = (dateStr: string) => {
@@ -1489,11 +1561,19 @@ const formatDate = (dateStr: string) => {
 const openCreateModal = () => {
   editingAgent.value = null
   editorMode.value = 'create'
+  editorInitialSection.value = 'basic'
+  editorInitialHighlightField.value = ''
   editorVisible.value = true
 }
 
 // 创建智能体
 const handleCreateAgent = () => {
+  if (!isReadyForAgent.value) {
+    MessagePlugin.warning(t('contextualGuide.tenantModels.needChatModelFirst'))
+    uiStore.openSettings('models')
+    return
+  }
+  markContextualGuideDone('agentList')
   openCreateModal()
 }
 
@@ -1504,7 +1584,7 @@ defineExpose({
 
 <style scoped lang="less">
 .agent-list-container {
-  margin: 0 16px 0 0;
+  margin: 0;
   height: 100%;
   box-sizing: border-box;
   flex: 1;
@@ -1518,7 +1598,8 @@ defineExpose({
   display: flex;
   flex-direction: column;
   min-width: 0;
-  padding: 20px 28px 0 28px;
+  // 右侧不留 padding，让滚动条贴到内容区最右缘；内边距改到 header / main 内部
+  padding: 20px 0 0 28px;
 }
 
 .agent-list-main {
@@ -1527,7 +1608,9 @@ defineExpose({
   overflow-y: auto;
   overflow-x: hidden;
   // 同 KB 列表：顶部去掉 padding，让 sticky 分组标题贴到容器最顶。
-  padding: 0 0 8px;
+  padding: 0 28px 8px 0;
+  scrollbar-width: auto;
+  scrollbar-color: auto;
 }
 
 .agent-list-main-loading {
@@ -1555,6 +1638,7 @@ defineExpose({
   align-items: center;
   justify-content: space-between;
   margin-bottom: 16px;
+  padding-right: 28px;
 
   .header-title {
     display: flex;

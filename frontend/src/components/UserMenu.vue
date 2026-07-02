@@ -1,7 +1,7 @@
 <template>
   <div class="user-menu" :class="{ 'user-menu--collapsed': uiStore.sidebarCollapsed }" ref="menuRef">
     <!-- 用户按钮 -->
-    <div class="user-button" @click="toggleMenu">
+    <div class="user-button" data-guide="user-menu" @click="toggleMenu">
       <div class="user-avatar">
         <img v-if="userAvatar" :src="userAvatar" :alt="$t('common.avatar')" />
         <span v-else class="avatar-placeholder">{{ userInitial }}</span>
@@ -38,7 +38,15 @@
             <span v-else class="dropdown-user-avatar-placeholder">{{ userInitial }}</span>
           </div>
           <div class="dropdown-user-meta">
-            <div class="dropdown-user-name">{{ userName }}</div>
+            <div class="dropdown-user-name-row">
+              <span class="dropdown-user-name">{{ userName }}</span>
+              <t-tooltip :content="$t('newUserGuide.reopen')" placement="top">
+                <button type="button" class="dropdown-guide-btn" :aria-label="$t('newUserGuide.reopen')"
+                  @click.stop="reopenGuide">
+                  <t-icon name="help-circle" size="14px" />
+                </button>
+              </t-tooltip>
+            </div>
           </div>
         </div>
 
@@ -95,16 +103,6 @@
           <t-icon name="secured" class="menu-icon" />
           <span>{{ $t('settings.apiInfo') }}</span>
         </div>
-        <div ref="imMenuItemRef" class="menu-item menu-item--submenu" :class="{ 'is-open': imSubmenuOpen }"
-          @mouseenter="showIMSubmenu" @mouseleave="scheduleHideIMSubmenu">
-          <t-icon name="link" class="menu-icon" />
-          <span class="menu-item-label">{{ $t('imOverview.menuTitle') }}</span>
-          <span v-if="hasActiveIMChannels" class="live-indicator" :title="$t('imOverview.liveIndicator')"
-            aria-hidden="true">
-            <span class="live-indicator-dot"></span>
-          </span>
-          <t-icon name="chevron-right" class="menu-chevron" />
-        </div>
         <div class="menu-divider"></div>
         <div class="menu-item" @click="handleSettings">
           <t-icon name="setting" class="menu-icon" />
@@ -118,32 +116,10 @@
         -->
         <div v-if="authStore.isSystemAdmin" class="menu-item" @click="handleSystemAdmin">
           <t-icon name="server" class="menu-icon" />
-          <span>系统管理</span>
+          <span>{{ $t('settings.system') }}</span>
         </div>
         <!-- 切换租户入口在下拉「当前租户」区块 hover；此处仅为分隔线与菜单项。 -->
         <div class="menu-divider"></div>
-        <div class="menu-item" @click="openClawhubSkill">
-          <span class="menu-icon menu-icon--emoji" role="img" :aria-label="$t('common.clawhubSkill')">🦞</span>
-          <span class="menu-text-with-icon">
-            <span>{{ $t('common.clawhubSkill') }}</span>
-            <span class="menu-new-badge">{{ $t('common.newBadge') }}</span>
-            <svg class="menu-external-icon" viewBox="0 0 16 16" aria-hidden="true">
-              <path fill="currentColor"
-                d="M12.667 8a.667.667 0 0 1 .666.667v4a2.667 2.667 0 0 1-2.666 2.666H4.667a2.667 2.667 0 0 1-2.667-2.666V5.333a2.667 2.667 0 0 1 2.667-2.666h4a.667.667 0 1 1 0 1.333h-4a1.333 1.333 0 0 0-1.333 1.333v7.334A1.333 1.333 0 0 0 4.667 13.333h6a1.333 1.333 0 0 0 1.333-1.333v-4A.667.667 0 0 1 12.667 8Zm2.666-6.667v4a.667.667 0 0 1-1.333 0V3.276l-5.195 5.195a.667.667 0 0 1-.943-.943l5.195-5.195h-2.057a.667.667 0 0 1 0-1.333h4a.667.667 0 0 1 .666.666Z" />
-            </svg>
-          </span>
-        </div>
-        <div class="menu-item" @click="openChromeExtension">
-          <t-icon name="extension" class="menu-icon" />
-          <span class="menu-text-with-icon">
-            <span>{{ $t('common.chromeExtension') }}</span>
-            <span class="menu-new-badge">{{ $t('common.newBadge') }}</span>
-            <svg class="menu-external-icon" viewBox="0 0 16 16" aria-hidden="true">
-              <path fill="currentColor"
-                d="M12.667 8a.667.667 0 0 1 .666.667v4a2.667 2.667 0 0 1-2.666 2.666H4.667a2.667 2.667 0 0 1-2.667-2.666V5.333a2.667 2.667 0 0 1 2.667-2.666h4a.667.667 0 1 1 0 1.333h-4a1.333 1.333 0 0 0-1.333 1.333v7.334A1.333 1.333 0 0 0 4.667 13.333h6a1.333 1.333 0 0 0 1.333-1.333v-4A.667.667 0 0 1 12.667 8Zm2.666-6.667v4a.667.667 0 0 1-1.333 0V3.276l-5.195 5.195a.667.667 0 0 1-.943-.943l5.195-5.195h-2.057a.667.667 0 0 1 0-1.333h4a.667.667 0 0 1 .666.666Z" />
-            </svg>
-          </span>
-        </div>
         <div class="menu-item" :title="$t('common.githubStarTip')" @click="openGithub">
           <t-icon name="logo-github" class="menu-icon" />
           <span class="menu-text-with-icon">
@@ -164,16 +140,6 @@
         </template>
       </div>
     </Transition>
-
-    <!-- IM submenu is teleported to body because the sidebar (.aside_box) has
-         overflow:hidden, which would otherwise clip any absolutely-positioned
-         child that reaches past its bounds. -->
-    <Teleport to="body">
-      <div v-if="imSubmenuOpen" class="im-submenu-floating" :style="imSubmenuStyle" @mouseenter="showIMSubmenu"
-        @mouseleave="scheduleHideIMSubmenu">
-        <IMChannelsOverviewPanel :active="imSubmenuOpen" @close="closeAll" @channels-changed="onChannelsChanged" />
-      </div>
-    </Teleport>
 
     <!-- Tenant switcher floating panel — shares the same teleport rationale
          as the IM submenu. Data comes from authStore.memberships, kept fresh via
@@ -243,9 +209,7 @@ import { useAuthStore } from '@/stores/auth'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { getCurrentUser, logout as logoutApi, userInfoFromApi } from '@/api/auth'
 import { useI18n } from 'vue-i18n'
-import IMChannelsOverviewPanel from '@/components/IMChannelsOverviewPanel.vue'
 import CreateTenantDialog from '@/components/CreateTenantDialog.vue'
-import { listAllIMChannels, type IMChannelOverview } from '@/api/agent'
 import {
   navigateAfterTenantSwitch,
   persistLastActiveTenantPreference,
@@ -254,6 +218,7 @@ import {
 import type { TenantInfo } from '@/api/tenant'
 import { useRoleLabel, useHomeTenant } from '@/composables/useRoleLabel'
 import { getRootZoom, rectToCssPx, cssViewportSize } from '@/utils/zoom'
+import { openNewUserGuide } from '@/config/contextualGuides'
 
 const { t } = useI18n()
 
@@ -300,15 +265,10 @@ const canSeeQuickNav = (key: string): boolean => {
 }
 
 const menuRef = ref<HTMLElement>()
-const imMenuItemRef = ref<HTMLElement>()
 const tenantMenuItemRef = ref<HTMLElement>()
 const menuVisible = ref(false)
-const imSubmenuOpen = ref(false)
-const imSubmenuStyle = ref<Record<string, string>>({})
 const tenantSubmenuOpen = ref(false)
 const tenantSubmenuStyle = ref<Record<string, string>>({})
-const hasActiveIMChannels = ref(false)
-let imSubmenuHideTimer: ReturnType<typeof setTimeout> | null = null
 let tenantSubmenuHideTimer: ReturnType<typeof setTimeout> | null = null
 
 // 用户信息
@@ -366,28 +326,7 @@ const handleSystemAdmin = () => {
 
 // Hover-driven submenu controls. A small hide delay tolerates the pointer
 // slipping off briefly onto the gap between menu item and submenu pane.
-const showIMSubmenu = () => {
-  if (imSubmenuHideTimer) {
-    clearTimeout(imSubmenuHideTimer)
-    imSubmenuHideTimer = null
-  }
-  // Compute panel position based on the menu item's rect — the panel is
-  // teleported to body so we can't rely on CSS `left: 100%`.
-  positionIMSubmenu()
-  imSubmenuOpen.value = true
-  clampFloatingToViewport('.im-submenu-floating', imSubmenuStyle)
-}
-
-const scheduleHideIMSubmenu = () => {
-  if (imSubmenuHideTimer) clearTimeout(imSubmenuHideTimer)
-  imSubmenuHideTimer = setTimeout(() => {
-    imSubmenuOpen.value = false
-    imSubmenuHideTimer = null
-  }, 180)
-}
-
 const closeAll = () => {
-  imSubmenuOpen.value = false
   tenantSubmenuOpen.value = false
   menuVisible.value = false
 }
@@ -414,7 +353,7 @@ const onTenantCreated = async (newTenant: TenantInfo) => {
 
 // ---------- Tenant switcher submenu ----------
 //
-// Same hover-driven submenu pattern as the IM panel above; data comes from
+// Same hover-driven submenu pattern; data comes from
 // authStore.memberships (refreshed from /auth/me when the submenu opens and
 // after membership-changing actions). PR 4 of #1303 relaxed the X-Tenant-ID
 // gate in middleware/auth.go to accept active membership rows, so flipping
@@ -541,58 +480,8 @@ const positionTenantSubmenu = () => {
   }
 }
 
-// Silent prefetch so the "live" indicator on the IM menu item reflects reality
-// as soon as the user sees the avatar area. Errors are swallowed — the
-// indicator just stays off if the request fails, which is the conservative
-// default. The panel component emits channels-changed after toggle/refresh so
-// we stay in sync without re-polling.
-const refreshIMStatus = async () => {
-  try {
-    const resp = await listAllIMChannels()
-    const data: IMChannelOverview[] = resp?.data || []
-    hasActiveIMChannels.value = data.some((c) => c.enabled)
-  } catch {
-    // Intentionally ignored — indicator just stays off.
-  }
-}
-
-const onChannelsChanged = (channels: IMChannelOverview[]) => {
-  hasActiveIMChannels.value = channels.some((c) => c.enabled)
-}
-
 // Anchor the floating submenu just to the right of the hovered menu item,
 // clamped to the viewport so it stays visible near the screen edge.
-const positionIMSubmenu = () => {
-  const el = imMenuItemRef.value
-  if (!el) return
-  // Same rationale as `positionTenantSubmenu` — convert visual-pixel rect to
-  // CSS pixels before feeding the fixed submenu's CSS lengths.
-  const zoom = getRootZoom()
-  const rect = rectToCssPx(el.getBoundingClientRect(), zoom)
-  const { width: vw } = cssViewportSize(zoom)
-  const PANEL_WIDTH = 300
-  const GAP = 8
-  const MARGIN = 8
-
-  let left = rect.right + GAP
-  // If the panel would overflow the right edge, flip to the left side.
-  if (left + PANEL_WIDTH + MARGIN > vw) {
-    left = Math.max(MARGIN, rect.left - PANEL_WIDTH - GAP)
-  }
-
-  // Align with the menu item's top; bottom-clamping is done after render
-  // when we know the panel's actual height (see clampSubmenuToViewport).
-  // 之前用 PANEL_MAX_HEIGHT=520 提前 clamp 会把实际只有 ~140px 的面板
-  // 顶到屏幕中上方，与菜单项错开很多。
-  const top = Math.max(MARGIN, rect.top)
-
-  imSubmenuStyle.value = {
-    left: `${left}px`,
-    top: `${top}px`,
-  }
-}
-
-// 在面板真正渲染后，按它的实际高度做底部 clamp，避免面板跑出屏幕外。
 const clampFloatingToViewport = (selector: string, target: { value: Record<string, string> }) => {
   requestAnimationFrame(() => {
     const panel = document.querySelector(selector) as HTMLElement | null
@@ -611,20 +500,9 @@ const clampFloatingToViewport = (selector: string, target: { value: Record<strin
   })
 }
 
-const CHROME_EXTENSION_URL =
-  'https://chromewebstore.google.com/detail/jpemjbopikggjlmikmclgbmkhhopjdgd?utm_source=item-share-cb'
-
-const CLAWHUB_SKILL_URL = 'https://clawhub.ai/lyingbug/weknora'
-
-// 打开 WeKnora Chrome 插件（Chrome应用商店）
-const openChromeExtension = () => {
+const reopenGuide = () => {
   menuVisible.value = false
-  window.open(CHROME_EXTENSION_URL, '_blank')
-}
-
-const openClawhubSkill = () => {
-  menuVisible.value = false
-  window.open(CLAWHUB_SKILL_URL, '_blank')
+  openNewUserGuide()
 }
 
 // 打开 GitHub
@@ -698,22 +576,16 @@ const loadUserInfo = async () => {
 const handleClickOutside = (e: MouseEvent) => {
   const target = e.target as Node
   if (menuRef.value && menuRef.value.contains(target)) return
-  // The IM and tenant submenus are teleported to body, so they're not inside
-  // menuRef — check them separately to avoid closing the dropdown when the
-  // user clicks one of the floating panels.
-  const imFloating = document.querySelector('.im-submenu-floating')
-  if (imFloating && imFloating.contains(target)) return
+  // Tenant submenu is teleported to body, so it's not inside menuRef.
   const tenantFloating = document.querySelector('.tenant-submenu-floating')
   if (tenantFloating && tenantFloating.contains(target)) return
   menuVisible.value = false
-  imSubmenuOpen.value = false
   tenantSubmenuOpen.value = false
 }
 
 onMounted(() => {
   document.addEventListener('click', handleClickOutside)
   loadUserInfo()
-  refreshIMStatus()
 })
 
 onUnmounted(() => {
@@ -925,7 +797,16 @@ onUnmounted(() => {
     justify-content: center;
   }
 
+  .dropdown-user-name-row {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    min-width: 0;
+  }
+
   .dropdown-user-name {
+    flex: 1;
+    min-width: 0;
     font-size: 14px;
     font-weight: 500;
     color: var(--td-text-color-primary);
@@ -933,6 +814,28 @@ onUnmounted(() => {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  .dropdown-guide-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 20px;
+    height: 20px;
+    margin: 0;
+    padding: 0;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--td-text-color-placeholder);
+    cursor: pointer;
+    transition: background-color 0.2s ease, color 0.2s ease;
+
+    &:hover {
+      background: var(--td-bg-color-container-hover);
+      color: var(--td-text-color-secondary);
+    }
   }
 }
 
@@ -961,7 +864,7 @@ onUnmounted(() => {
       background: var(--td-bg-color-container-hover);
 
       .dropdown-tenant-panel-trail {
-        color: var(--td-brand-color);
+        color: var(--td-text-color-secondary);
       }
     }
   }
@@ -1056,45 +959,6 @@ onUnmounted(() => {
 
       .menu-chevron {
         color: var(--td-text-color-secondary);
-      }
-    }
-
-    // "Live" indicator — shown when at least one IM channel is enabled.
-    // A small green dot with a halo that pulses to signal active connections.
-    .live-indicator {
-      position: relative;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 10px;
-      height: 10px;
-      margin-right: 2px;
-      flex-shrink: 0;
-    }
-
-    .live-indicator-dot {
-      position: relative;
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: var(--td-success-color, #07c160);
-
-      // Pulsing halo around the dot. Prefers-reduced-motion disables it.
-      &::after {
-        content: '';
-        position: absolute;
-        inset: -3px;
-        border-radius: 50%;
-        background: var(--td-success-color, #07c160);
-        opacity: 0.45;
-        animation: im-live-pulse 1.6s ease-out infinite;
-        pointer-events: none;
-      }
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-      .live-indicator-dot::after {
-        animation: none;
       }
     }
   }
@@ -1201,39 +1065,10 @@ onUnmounted(() => {
   transform: translateY(0);
 }
 
-// Live indicator halo animation — a soft expanding ring to signal that at
-// least one IM channel is actively connected.
-@keyframes im-live-pulse {
-  0% {
-    transform: scale(0.9);
-    opacity: 0.45;
-  }
-
-  70% {
-    transform: scale(1.8);
-    opacity: 0;
-  }
-
-  100% {
-    transform: scale(1.8);
-    opacity: 0;
-  }
-}
 </style>
 
 <style lang="less">
-// Non-scoped: the IM submenu is teleported to <body> so scoped styles
-// from this component won't reach it. The panel component's own CSS is
-// scoped and self-contained; this rule only positions the wrapper.
-.im-submenu-floating {
-  position: fixed;
-  z-index: 1100;
-  // Invisible padding forms a pointer bridge from the menu item to the
-  // panel so hovering across the gap doesn't fire mouseleave-hide.
-  padding-left: 2px;
-}
-
-// Tenant switcher submenu — same teleport rationale as .im-submenu-floating.
+// Tenant switcher submenu — teleported to <body>.
 // All styling for the panel itself lives here (not in a child component) so
 // the markup in UserMenu.vue stays self-contained.
 .tenant-submenu-floating {
@@ -1279,12 +1114,12 @@ onUnmounted(() => {
     }
 
     &.is-current {
-      background: rgba(7, 192, 95, 0.08);
+      background: var(--td-bg-color-secondarycontainer);
       cursor: default;
 
       .tenant-submenu-item-name {
-        color: var(--td-brand-color);
-        font-weight: 500;
+        color: var(--td-text-color-primary);
+        font-weight: 600;
       }
     }
   }
@@ -1355,8 +1190,8 @@ onUnmounted(() => {
     line-height: 1.2;
     padding: 2px 6px;
     border-radius: 4px;
-    background: var(--td-brand-color-light);
-    color: var(--td-brand-color);
+    background: var(--td-bg-color-component);
+    color: var(--td-text-color-secondary);
   }
 
   // Home 标识改为叠在 avatar 右下角的小 dot，不在 meta 行额外占位，让
@@ -1374,7 +1209,7 @@ onUnmounted(() => {
     height: 14px;
     border-radius: 50%;
     background: var(--td-bg-color-container);
-    color: var(--td-brand-color);
+    color: var(--td-text-color-secondary);
     border: 1.5px solid var(--td-bg-color-container);
     display: flex;
     align-items: center;

@@ -34,10 +34,15 @@ type TokenUsage struct {
 
 // LLMToolCall represents a function/tool call from the LLM
 type LLMToolCall struct {
-	ID       string       `json:"id"`
-	Type     string       `json:"type"` // "function"
-	Function FunctionCall `json:"function"`
+	ID               string           `json:"id"`
+	Type             string           `json:"type"` // "function"
+	Function         FunctionCall     `json:"function"`
+	ProviderMetadata ToolCallMetadata `json:"provider_metadata,omitempty"`
 }
+
+// ToolCallMetadata carries provider-specific tool-call state that must round-trip
+// with the assistant tool call, without teaching core agent code vendor fields.
+type ToolCallMetadata map[string]json.RawMessage
 
 // FunctionCall represents the function details
 type FunctionCall struct {
@@ -54,6 +59,19 @@ type ChatResponse struct {
 	ToolCalls        []LLMToolCall `json:"tool_calls,omitempty"`
 	FinishReason     string        `json:"finish_reason,omitempty"`
 	Usage            TokenUsage    `json:"usage"`
+
+	// AnswerStreamed reports whether the user-facing answer text was already
+	// streamed live to the final-answer UI area during this round (i.e. the
+	// model answered with plain content). When true, the natural-stop branch
+	// must only emit the closing
+	// Done marker for AnswerEventID instead of re-emitting the whole answer —
+	// otherwise the answer would render twice and "jump" at end of stream.
+	// Transient, never persisted.
+	AnswerStreamed bool `json:"-"`
+	// AnswerEventID is the EventBus event ID under which the live answer
+	// chunks were streamed, so the natural-stop branch can close the same
+	// stream with a Done marker. Empty when AnswerStreamed is false.
+	AnswerEventID string `json:"-"`
 }
 
 // Response type
@@ -84,6 +102,13 @@ const (
 	ResponseTypeToolApprovalRequired ResponseType = "tool_approval_required"
 	// ToolApprovalResolved: user approved/rejected (or timeout); informational for UI replay
 	ResponseTypeToolApprovalResolved ResponseType = "tool_approval_resolved"
+	// MCPOAuthRequired: an OAuth-enabled MCP service was invoked but the user
+	// has not authorized it — UI must surface an "Authorize" prompt and the
+	// agent pauses until authorization completes (or the wait times out).
+	ResponseTypeMCPOAuthRequired ResponseType = "mcp_oauth_required"
+	// MCPOAuthResolved: authorization completed / timed out / canceled;
+	// informational for UI replay.
+	ResponseTypeMCPOAuthResolved ResponseType = "mcp_oauth_resolved"
 )
 
 // StreamResponse stream response

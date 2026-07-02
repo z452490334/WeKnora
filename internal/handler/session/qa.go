@@ -31,6 +31,10 @@ type qaRequestContext struct {
 	assistantMessage  *types.Message
 	knowledgeBaseIDs  []string
 	knowledgeIDs      []string
+	tagScopes         []types.TagScope
+	tagIDs            []string
+	mcpServiceIDs     []string
+	skillNames        []string
 	summaryModelID    string
 	webSearchEnabled  bool
 	enableMemory      bool // Whether memory feature is enabled
@@ -59,6 +63,9 @@ func (rc *qaRequestContext) buildQARequest() *types.QARequest {
 		CustomAgent:        rc.customAgent,
 		KnowledgeBaseIDs:   rc.knowledgeBaseIDs,
 		KnowledgeIDs:       rc.knowledgeIDs,
+		TagScopes:          rc.tagScopes,
+		MCPServiceIDs:      rc.mcpServiceIDs,
+		SkillNames:         rc.skillNames,
 		ImageURLs:          imageURLs,
 		ImageDescription:   imageDescription,
 		UserMessageID:      rc.userMessageID,
@@ -240,6 +247,15 @@ func (h *Handler) parseQARequest(c *gin.Context, logPrefix string) (*qaRequestCo
 	//      had memory enabled in practice, keep that behaviour.
 	enableMemory := h.resolveEnableMemory(ctx, request.EnableMemory)
 
+	tagScopes := mergeTagScopesFromRequestIDs(
+		tagScopesFromMentionedItems(request.MentionedItems),
+		dedupRequestStrings(request.TagIDs),
+		secutils.SanitizeForLogArray(kbIDs),
+	)
+	tagIDs := dedupRequestStrings(append(request.TagIDs, mentionedIDsByType(request.MentionedItems, "tag")...))
+	mcpServiceIDs := dedupRequestStrings(append(request.MCPServiceIDs, mentionedIDsByType(request.MentionedItems, "mcp")...))
+	skillNames := dedupRequestStrings(append(request.SkillNames, mentionedIDsByType(request.MentionedItems, "skill")...))
+
 	// Build request context
 	reqCtx := &qaRequestContext{
 		ctx:         ctx,
@@ -259,6 +275,10 @@ func (h *Handler) parseQARequest(c *gin.Context, logPrefix string) (*qaRequestCo
 		},
 		knowledgeBaseIDs:  secutils.SanitizeForLogArray(kbIDs),
 		knowledgeIDs:      secutils.SanitizeForLogArray(knowledgeIDs),
+		tagScopes:         tagScopes,
+		tagIDs:            secutils.SanitizeForLogArray(tagIDs),
+		mcpServiceIDs:     secutils.SanitizeForLogArray(mcpServiceIDs),
+		skillNames:        secutils.SanitizeForLogArray(skillNames),
 		summaryModelID:    secutils.SanitizeForLog(request.SummaryModelID),
 		webSearchEnabled:  request.WebSearchEnabled,
 		enableMemory:      enableMemory,
@@ -423,6 +443,17 @@ func (h *Handler) setupSSEStream(reqCtx *qaRequestContext, generateTitle bool) *
 	// Setup stop event handler
 	h.setupStopEventHandler(eventBus, reqCtx.sessionID, reqCtx.session.TenantID, reqCtx.assistantMessage, cancel)
 
+	// Watch for stop events independently of the client SSE connection so a
+	// user-requested stop reliably cancels generation even when the client
+	// has already disconnected (e.g. API-Key callers that close the stream
+	// before POSTing /stop). The watcher self-terminates on a terminal stream
+	// event, so its lifetime is decoupled from when the QA service call
+	// returns (KnowledgeQA returns immediately while streaming continues in a
+	// background goroutine, whereas AgentQA blocks until done). Use a
+	// connection-independent context derived from baseCtx so it survives the
+	// client disconnect.
+	h.startStopWatcher(logger.CloneContext(baseCtx), reqCtx.sessionID, reqCtx.assistantMessage.ID, eventBus)
+
 	// Setup stream handler
 	h.setupStreamHandler(asyncCtx, reqCtx.sessionID, reqCtx.assistantMessage.ID,
 		reqCtx.requestID, reqCtx.receivedAt, reqCtx.assistantMessage, eventBus)
@@ -572,28 +603,6 @@ func (h *Handler) AgentQA(c *gin.Context) {
 			agentModeEnabled, reqCtx.customAgent.Config.AgentMode)
 	}
 
-	// Tenant-RBAC gate: block Viewers from running agents whose author
-	// has cleared RunnableByViewer. The flag exists so an admin can mark
-	// an agent as "internal tools only" without turning every viewer
-	// into a contributor. Gated behind cfg.Tenant.EnableRBAC so the
-	// check is dormant during the rollout window — same pattern as
-	// middleware/rbac.go.
-	if agentModeEnabled && reqCtx.customAgent != nil && !reqCtx.customAgent.RunnableByViewer {
-		role := types.TenantRoleFromContext(reqCtx.ctx)
-		if !role.HasPermission(types.TenantRoleContributor) {
-			if h.config != nil && h.config.Tenant.IsRBACEnforced() {
-				logger.Warnf(reqCtx.ctx,
-					"[rbac] agent run blocked: viewer cannot run runnable_by_viewer=false agent: agent=%s role=%s",
-					reqCtx.customAgent.ID, role)
-				c.Error(errors.NewForbiddenError("Forbidden: this agent is restricted to contributors and above"))
-				return
-			}
-			logger.Warnf(reqCtx.ctx,
-				"[rbac] agent run would be blocked (logged, not enforced): agent=%s role=%s",
-				reqCtx.customAgent.ID, role)
-		}
-	}
-
 	// Sanity gate: agent mode requires a resolved CustomAgent. If we got
 	// here with agent_enabled=true but agent_id missing/unresolvable, the
 	// AgentQA service will fail deep inside the async goroutine with a
@@ -689,6 +698,20 @@ func (h *Handler) executeQA(reqCtx *qaRequestContext, mode qaMode, generateTitle
 	// (Agent mode handles completion in the defer block instead)
 	if mode == qaModeNormal {
 		var completionHandled bool
+
+		// Persist reasoning_content into agent_steps so historical reload can
+		// reconstruct the thinking card (same shape as Agent-mode steps).
+		// Accumulate on assistantMessage directly so user-initiated stop also
+		// keeps whatever reasoning had streamed before the cancel.
+		streamCtx.eventBus.On(event.EventAgentThought, func(ctx context.Context, evt event.Event) error {
+			data, ok := evt.Data.(event.AgentThoughtData)
+			if !ok || data.Content == "" {
+				return nil
+			}
+			appendQuickAnswerReasoning(streamCtx.assistantMessage, data.Content)
+			return nil
+		})
+
 		streamCtx.eventBus.On(event.EventAgentFinalAnswer, func(ctx context.Context, evt event.Event) error {
 			data, ok := evt.Data.(event.AgentFinalAnswerData)
 			if !ok {
@@ -764,16 +787,24 @@ func (h *Handler) executeQA(reqCtx *qaRequestContext, mode qaMode, generateTitle
 		}
 
 		if serviceErr != nil {
-			logger.ErrorWithFields(streamCtx.asyncCtx, serviceErr, nil)
-			streamCtx.eventBus.Emit(streamCtx.asyncCtx, event.Event{
-				Type:      event.EventError,
-				SessionID: sessionID,
-				Data: event.ErrorData{
-					Error:     serviceErr.Error(),
-					Stage:     stageName,
+			// A user-requested stop cancels asyncCtx, which surfaces here as a
+			// context cancellation. That is an expected outcome, not a failure:
+			// the stop event already notifies the client, so don't emit a
+			// spurious error event (which would otherwise show an error toast).
+			if streamCtx.asyncCtx.Err() != nil {
+				logger.Infof(streamCtx.asyncCtx, "QA cancelled by user stop for session: %s", sessionID)
+			} else {
+				logger.ErrorWithFields(streamCtx.asyncCtx, serviceErr, nil)
+				streamCtx.eventBus.Emit(streamCtx.asyncCtx, event.Event{
+					Type:      event.EventError,
 					SessionID: sessionID,
-				},
-			})
+					Data: event.ErrorData{
+						Error:     serviceErr.Error(),
+						Stage:     stageName,
+						SessionID: sessionID,
+					},
+				})
+			}
 		}
 	}()
 
@@ -876,12 +907,32 @@ func (h *Handler) persistLastRequestState(parentCtx context.Context, reqCtx *qaR
 		ModelID:          reqCtx.summaryModelID,
 		KnowledgeBaseIDs: reqCtx.knowledgeBaseIDs,
 		KnowledgeIDs:     reqCtx.knowledgeIDs,
+		TagIDs:           reqCtx.tagIDs,
+		MCPServiceIDs:    reqCtx.mcpServiceIDs,
+		SkillNames:       reqCtx.skillNames,
+		MentionedItems:   reqCtx.mentionedItems,
 		WebSearchEnabled: reqCtx.webSearchEnabled,
 	}
 
 	if err := h.sessionService.UpdateSessionLastRequestState(ctx, reqCtx.sessionID, state); err != nil {
 		logger.Warnf(ctx, "persist last_request_state failed for session %s: %v", reqCtx.sessionID, err)
 	}
+}
+
+// appendQuickAnswerReasoning accumulates streamed reasoning_content from
+// KnowledgeQA (fast answer) into a single AgentStep for history replay.
+func appendQuickAnswerReasoning(msg *types.Message, content string) {
+	if content == "" {
+		return
+	}
+	if len(msg.AgentSteps) == 0 {
+		msg.AgentSteps = types.AgentSteps{{
+			Iteration: 0,
+			Timestamp: time.Now(),
+			ToolCalls: make([]types.ToolCall, 0),
+		}}
+	}
+	msg.AgentSteps[0].ReasoningContent += content
 }
 
 // completeAssistantMessage marks an assistant message as complete, updates it,
