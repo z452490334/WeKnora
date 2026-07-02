@@ -14,6 +14,11 @@ ENV GOPRIVATE=${GOPRIVATE_ARG}
 ENV GOPROXY=${GOPROXY_ARG}
 ENV GOSUMDB=${GOSUMDB_ARG}
 
+# 配置APT国内源
+#RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list \
+#    && sed -i 's/security.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list \
+#    && apt-get update
+
 # Install dependencies
 RUN if [ -n "$APK_MIRROR_ARG" ]; then \
         sed -i "s@deb.debian.org@${APK_MIRROR_ARG}@g" /etc/apt/sources.list.d/debian.sources; \
@@ -52,6 +57,11 @@ FROM debian:12.12-slim
 
 WORKDIR /app
 
+RUN mkdir -p /root/.config/pip && \
+    echo "[global]" > /root/.config/pip/pip.conf && \
+    echo "index-url = https://mirrors.aliyun.com/pypi/simple/" >> /root/.config/pip/pip.conf && \
+    echo "trusted-host = mirrors.aliyun.com" >> /root/.config/pip/pip.conf
+
 ARG APK_MIRROR_ARG
 
 # Create a non-root user first
@@ -63,6 +73,7 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 # Then switch to mirror if specified and install other packages
+
 RUN if [ -n "$APK_MIRROR_ARG" ]; then \
         sed -i "s@deb.debian.org@${APK_MIRROR_ARG}@g" /etc/apt/sources.list.d/debian.sources; \
     fi && \
@@ -74,6 +85,8 @@ RUN if [ -n "$APK_MIRROR_ARG" ]; then \
         nodejs npm \
         gosu \
         ffmpeg && \
+    pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/ \
+		    && pip config set global.trusted-host mirrors.aliyun.com && \
     python3 -m pip install --break-system-packages --upgrade pip setuptools wheel && \
     mkdir -p /home/appuser/.local/bin && \
     curl -LsSf https://astral.sh/uv/install.sh | CARGO_HOME=/home/appuser/.cargo UV_INSTALL_DIR=/home/appuser/.local/bin sh && \

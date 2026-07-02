@@ -37,9 +37,9 @@ services:
     volumes:
       - data-files:/data/files
       - docreader-tmp:/tmp/docreader:ro
-      - ./config/config.yaml:/app/config/config.yaml
+      - ./config/config.yaml:/app/config/config.yaml:Z,U
       # Optional: mount custom skills directory (allows adding skills without rebuilding image)
-      - ./skills/preloaded:/app/skills/preloaded
+      - ./skills/preloaded:/app/skills/preloaded:Z,U
       # Optional: declarative built-in models. Copy config/builtin_models.yaml.example
       # to config/builtin_models.yaml, edit it for your deployment, then
       # uncomment the line below. See docs/BUILTIN_MODELS.md.

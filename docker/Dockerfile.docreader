@@ -4,9 +4,14 @@
 FROM python:3.10.18-bookworm AS builder
 
 ARG APT_MIRROR=""
+
+ENV PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+ENV PIP_TRUSTED_HOST=mirrors.aliyun.com
+ENV UV_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+
 RUN if [ -n "$APT_MIRROR" ]; then \
-        sed -i "s@http://deb.debian.org@${APT_MIRROR}@g" /etc/apt/sources.list.d/debian.sources && \
-        sed -i "s@http://security.debian.org@${APT_MIRROR}@g" /etc/apt/sources.list.d/debian.sources; \
+        sed -i "s@deb.debian.org@${APT_MIRROR}@g" /etc/apt/sources.list.d/debian.sources && \
+        sed -i "s@security.debian.org@${APT_MIRROR}@g" /etc/apt/sources.list.d/debian.sources; \
     fi
 
 WORKDIR /app
@@ -65,8 +70,11 @@ RUN if [ -z "$TARGETARCH" ]; then \
 
 # 复制依赖文件
 COPY docreader/pyproject.toml docreader/uv.lock ./
+#RUN pip install uv --break-system-packages && \
+#    python -m uv sync --locked --no-dev
+
 RUN pip install uv --break-system-packages && \
-    python -m uv sync --locked --no-dev
+    python -m uv sync --no-dev
 
 # 复制源代码和生成脚本
 COPY docreader docreader
@@ -83,8 +91,8 @@ FROM python:3.10.18-bookworm AS runner
 
 ARG APT_MIRROR=""
 RUN if [ -n "$APT_MIRROR" ]; then \
-        sed -i "s@http://deb.debian.org@${APT_MIRROR}@g" /etc/apt/sources.list.d/debian.sources && \
-        sed -i "s@http://security.debian.org@${APT_MIRROR}@g" /etc/apt/sources.list.d/debian.sources; \
+        sed -i "s@deb.debian.org@${APT_MIRROR}@g" /etc/apt/sources.list.d/debian.sources && \
+        sed -i "s@security.debian.org@${APT_MIRROR}@g" /etc/apt/sources.list.d/debian.sources; \
     fi
 
 WORKDIR /app
