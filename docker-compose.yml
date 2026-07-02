@@ -31,6 +31,9 @@ services:
       dockerfile: docker/Dockerfile.app
       args:
         - APK_MIRROR_ARG=${APK_MIRROR_ARG:-}
+        - GOPROXY_ARG=${GOPROXY_ARG:-}
+        - GOPRIVATE_ARG=${GOPRIVATE_ARG:-}
+        - GOSUMDB_ARG=${GOSUMDB_ARG:-off}
     container_name: WeKnora-app
     ports:
       - "${APP_PORT:-8080}:8080"
